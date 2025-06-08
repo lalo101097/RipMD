@@ -2,6 +2,8 @@
 
 **RipMD** es una herramienta basada en **Selenium** diseñada para automatizar la descarga de capítulos desde el sitio Zonatmo.
 
+Nota: requiere tener instalado Google Chrome.
+
 ## Funcionalidades
 
 ### 📥 Descarga por capítulo
