@@ -279,13 +279,13 @@ namespace RipMD
                     if (url.Contains("/viewer/"))
                     {
                         var extractor = new TmoExtractor(downloader);
-                        await extractor.DescargarCapitulo(url, ActProgCap, ActCapDes);
+                        await ReintentarSi429Async(() => extractor.DescargarCapitulo(url, ActProgCap, ActCapDes));
                     }
                     else if (url.Contains("/library/"))
                     {
                         var mangaService = new MangaService(downloader);
+                        var capitulos = await ReintentarSi429AsyncT(() => mangaService.ObtenerCapitulos(url, capInicio, capFinal));
 
-                        var capitulos = await mangaService.ObtenerCapitulos(url, capInicio, capFinal);
                         var extractor = new TmoExtractor(downloader);
                         PbrManga.Minimum = 0;
                         PbrManga.Maximum = capitulos.Count;
@@ -300,14 +300,46 @@ namespace RipMD
                         foreach (var item in capitulos)
                         {
                             PbrManga.Value += 1;
-                            string urlCapitulo = await ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina);
-                            await extractor.DescargarCapitulo(urlCapitulo, ActProgCap, ActCapDes);
+                            string urlCapitulo = await ReintentarSi429AsyncT(() => ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina));
+                            await ReintentarSi429Async(() => extractor.DescargarCapitulo(urlCapitulo, ActProgCap, ActCapDes));
+                        }
+                    }
+                    else if (url.Contains("/lists/"))
+                    {
+                        var mangaService = new MangaService(downloader);
+                        var mangas = await ReintentarSi429AsyncT(() => mangaService.ObtenerMangas(url));
+
+                        foreach (var manga in mangas)
+                        {
+                            if (!manga.Url.Contains("/one_shot/"))
+                            {
+                                var capitulos = await ReintentarSi429AsyncT(() => mangaService.ObtenerCapitulos(manga.Url, null, null));
+                                var extractor = new TmoExtractor(downloader);
+
+                                PbrManga.Minimum = 0;
+                                PbrManga.Maximum = capitulos.Count;
+                                PbrManga.Value = 0;
+
+                                if (capitulos.Count == 0)
+                                {
+                                    MessageBox.Show($"No se encontraron capítulos para el manga:\n{manga.Titulo}", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                    continue;
+                                }
+
+                                foreach (var item in capitulos)
+                                {
+                                    PbrManga.Value += 1;
+                                    string urlCapitulo = await ReintentarSi429AsyncT(() => ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina));
+                                    await ReintentarSi429Async(() => extractor.DescargarCapitulo(urlCapitulo, ActProgCap, ActCapDes));
+                                }
+                            }
                         }
                     }
                     else
                     {
                         MessageBox.Show($"URL no reconocida:\n{url}", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
+
                 }
                 catch (Exception ex)
                 {
@@ -328,6 +360,37 @@ namespace RipMD
             PbrCapitulo.Value = 0;
             PbrManga.Value = 0;
             LblCapDescar.Text = "";
+        }
+
+        public static async Task ReintentarSi429Async(Func<Task> accion)
+        {
+            while (true)
+            {
+                try
+                {
+                    await accion();
+                    break; // Éxito, salimos del bucle
+                }
+                catch (HttpRequestException ex)
+                {
+                    await Task.Delay(20000); // Espera 20 segundos
+                }
+            }
+        }
+
+        public static async Task<T> ReintentarSi429AsyncT<T>(Func<Task<T>> funcion)
+        {
+            while (true)
+            {
+                try
+                {
+                    return await funcion();
+                }
+                catch (HttpRequestException ex) when (ex.Message.Contains("429"))
+                {
+                    await Task.Delay(20000); // Espera 20 segundos
+                }
+            }
         }
 
 

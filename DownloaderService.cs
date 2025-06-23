@@ -63,24 +63,7 @@ namespace RipMD.Services
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Referrer = new Uri(referer);
-
-                using (var response = await _client.SendAsync(request))
-                {
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        string detalle = await response.Content.ReadAsStringAsync();
-                        throw new HttpRequestException(
-                            $"Error HTTP {response.StatusCode} ({(int)response.StatusCode}) al descargar '{url}'.\nContenido:\n{detalle.Substring(0, Math.Min(500, detalle.Length))}"
-                        );
-                    }
-
-                    using (var fs = new FileStream(tempWebP, FileMode.Create, FileAccess.Write))
-                    {
-                        await response.Content.CopyToAsync(fs);
-                    }
-                }
+                await DescargarConReintento(url, referer, tempWebP);
 
                 WebPHelper.ConvertToJpeg(tempWebP, rutaJPEG);
             }
@@ -106,26 +89,9 @@ namespace RipMD.Services
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Referrer = new Uri(referer);
+                await DescargarConReintento(url, referer, tempPath);
 
-                using (var response = await _client.SendAsync(request))
-                {
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        string detalle = await response.Content.ReadAsStringAsync();
-                        throw new HttpRequestException(
-                            $"Error HTTP {response.StatusCode} ({(int)response.StatusCode}) al descargar '{url}'.\nContenido:\n{detalle.Substring(0, Math.Min(500, detalle.Length))}"
-                        );
-                    }
-
-                    using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write))
-                    {
-                        await response.Content.CopyToAsync(fs);
-                    }
-
-                    File.Move(tempPath, rutaDestino, overwrite: true);
-                }
+                File.Move(tempPath, rutaDestino, overwrite: true);
             }
             catch (HttpRequestException ex)
             {
@@ -138,9 +104,36 @@ namespace RipMD.Services
             finally
             {
                 if (File.Exists(tempPath))
-                    File.Delete(tempPath); // Por si hubo error antes de mover
+                    File.Delete(tempPath);
             }
         }
+
+        private async Task DescargarConReintento(string url, string referer, string rutaDestino)
+        {
+            while (true)
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Referrer = new Uri(referer);
+
+                using (var response = await _client.SendAsync(request))
+                {
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        // Espera 20 segundos y vuelve a intentar
+                        await Task.Delay(20000);
+                        continue;
+                    }
+
+                    using (var fs = new FileStream(rutaDestino, FileMode.Create, FileAccess.Write))
+                    {
+                        await response.Content.CopyToAsync(fs);
+                    }
+
+                    break; // Éxito, salimos del bucle
+                }
+            }
+        }
+
 
         public async Task<string> DescargarHtml(string url)
         {
