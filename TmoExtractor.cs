@@ -1,11 +1,12 @@
 ﻿using HtmlAgilityPack;
-using RipMD;
+using RipMD.Helpers;
 using RipMD.Services;
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
-using System.Security.Policy;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RipMD.Extractors
@@ -21,10 +22,10 @@ namespace RipMD.Extractors
             this.baseDirectory = downloader.GetOutputDirectory();
         }
 
-        public async Task DescargarCapitulo(string url, Action<int> ActProgCap, Action<string> ActCapDes)
+        public async Task DescargarCapitulo(string url, CancellationToken cancellationToken, Action<int> actProgCap, Action<string> actCapDes)
         {
-            // Modificar URL para cargar modo cascada (todas las imágenes en orden)
-            string html = await downloader.DescargarHtml(url.Replace("paginated", "cascade"));
+            // Modificar URL para cargar modo cascada
+            string html = await downloader.DescargarHtml(url.Replace("paginated", "cascade"), cancellationToken);
 
             // Extraer título para carpeta
             var match = Regex.Match(html, @"<title>\s*(.*?)\s*</title>", RegexOptions.Singleline);
@@ -34,21 +35,18 @@ namespace RipMD.Extractors
             string path = Path.Combine(baseDirectory, nombre);
             Directory.CreateDirectory(path);
 
-            ActCapDes?.Invoke(nombre);
+            actCapDes?.Invoke(nombre);
 
             string[] imagenes;
 
-            if (html.Contains("let dirPath")) // modo moderno detectado
+            if (html.Contains("let dirPath")) // modo moderno
             {
                 var baseMatch = Regex.Match(html, @"(https?:\/\/[^""']+\/(?:uploads|data)\/)");
                 if (!baseMatch.Success) throw new Exception("No se pudo encontrar la URL base de las imágenes.");
-
                 string baseUrl = baseMatch.Groups[1].Value;
 
                 var listaMatch = Regex.Match(html, @"let\s+images\s*=\s*(\[[^\]]+\])", RegexOptions.Singleline);
-                if (!listaMatch.Success)
-                    throw new Exception("No se pudo encontrar la lista de imágenes.");
-
+                if (!listaMatch.Success) throw new Exception("No se pudo encontrar la lista de imágenes.");
                 string rawArray = listaMatch.Groups[1].Value;
 
                 imagenes = Regex.Matches(rawArray, "\"(.*?)\"")
@@ -61,14 +59,11 @@ namespace RipMD.Extractors
                     if (!imagenes[i].StartsWith("http"))
                         imagenes[i] = baseUrl + imagenes[i];
                 }
-
-                await DescargarImagenes(imagenes, "", path, url, ActProgCap);
             }
-            else // modo legacy o lazy-load con data-src
+            else // modo legacy
             {
                 var doc = new HtmlAgilityPack.HtmlDocument();
                 doc.LoadHtml(html);
-
                 var nodes = doc.DocumentNode.SelectNodes("//img[@data-src]");
                 if (nodes != null && nodes.Count > 0)
                 {
@@ -81,29 +76,27 @@ namespace RipMD.Extractors
                     var matches = Regex.Matches(html, @"https?:\/\/.*?\/uploads\/.*?\.(webp|jpg|png)", RegexOptions.IgnoreCase);
                     imagenes = matches.Cast<Match>().Select(m => m.Value).ToArray();
                 }
-
-                await DescargarImagenes(imagenes, "", path, url, ActProgCap);
             }
+
+            await DescargarImagenes(imagenes, "", path, url, cancellationToken, actProgCap);
         }
 
-
-
-        private async Task DescargarImagenes(string[] urls, string baseUrl, string path, string urlex, Action<int> ActProgCap)
+        private async Task DescargarImagenes(string[] urls, string baseUrl, string path, string urlex, CancellationToken cancellationToken, Action<int> actProgCap)
         {
-
             for (int i = 0; i < urls.Length; i++)
             {
-                ActProgCap?.Invoke((i + 1) * 100 / urls.Length);
+                cancellationToken.ThrowIfCancellationRequested(); // Punto de control para la cancelación
+
+                actProgCap?.Invoke((i + 1) * 100 / urls.Length);
                 string archivo = (i + 1).ToString("D3");
                 string url = string.IsNullOrEmpty(baseUrl) ? urls[i] : baseUrl + urls[i];
-
                 string ext = Path.GetExtension(url).ToLower();
-                if (ext == ".webp")
-                    await downloader.DescargarYConvertirWebP(url, Path.Combine(path, archivo), urlex);
-                else
-                    await downloader.DescargarArchivo(url, Path.Combine(path, archivo + ext), urlex);
-            }
 
+                if (ext == ".webp")
+                    await downloader.DescargarYConvertirWebP(url, Path.Combine(path, archivo), urlex, cancellationToken);
+                else
+                    await downloader.DescargarArchivo(url, Path.Combine(path, archivo + ext), urlex, cancellationToken);
+            }
         }
 
         private string LimpiaNombre(string nombre)
@@ -112,35 +105,13 @@ namespace RipMD.Extractors
                 return "Capítulo";
 
             nombre = nombre.Replace(" - ", " ");
-
-            // Decodifica HTML (&amp;, &nbsp;, etc.)
             nombre = WebUtility.HtmlDecode(nombre);
-
-            // Elimina caracteres inválidos en nombres de archivo/carpeta
             nombre = Regex.Replace(nombre, @"[\\/:*?""<>|]", "");
-
-            // Limpia saltos de línea, tabs y espacios invisibles
             nombre = Regex.Replace(nombre, @"[\r\n\t\u00A0\u200B]+", " ");
-
-            // Reemplaza caracteres Unicode problemáticos pero preserva acentos
-            nombre = nombre.Replace('“', ' ')
-                           .Replace('”', ' ')
-                           .Replace('‘', '\'')
-                           .Replace('’', '\'')
-                           .Replace('–', '-')
-                           .Replace('—', '-')
-                           .Replace('¡', ' ')
-                           .Replace('¿', ' ')
-                           .Replace('?', ' ')
-                           .Replace('!', ' ');
-
-            // Reduce múltiples espacios a uno solo
+            nombre = nombre.Replace('“', ' ').Replace('”', ' ').Replace('‘', '\'').Replace('’', '\'').Replace('–', '-').Replace('—', '-').Replace('¡', ' ').Replace('¿', ' ').Replace('?', ' ').Replace('!', ' ');
             nombre = Regex.Replace(nombre, @"\s{2,}", " ").Trim();
-
-            // Asegura que no termine en espacio o punto
             nombre = nombre.TrimEnd('.', ' ');
 
-            // Busca la palabra "Capítulo" para dividir el nombre
             int idx = nombre.IndexOf("Capítulo", StringComparison.OrdinalIgnoreCase);
             if (idx >= 0)
             {
@@ -150,10 +121,7 @@ namespace RipMD.Extractors
                 nombre = $"{parte1} {parte2}";
             }
 
-            // Finalmente, limitar longitud a 80 caracteres por seguridad de ruta
             return nombre.Length > 80 ? nombre.Substring(0, 80).TrimEnd('.', ' ') : nombre;
         }
-
-
     }
 }

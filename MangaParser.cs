@@ -1,32 +1,21 @@
-﻿using System;
+﻿using HtmlAgilityPack;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace RipMD
 {
     internal class MangaParser
     {
-        private static readonly HttpClientHandler _handler = new HttpClientHandler
-        {
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10
-        };
+        // ELIMINADO: HttpClient estático
 
-        private static readonly HttpClient _httpClient = new HttpClient(_handler);
-        public static async Task<List<MangaInfo>> ObtenerMangasDesdeHtml(string html)
+        public static List<MangaInfo> ObtenerMangasDesdeHtml(string html)
         {
             var doc = new HtmlAgilityPack.HtmlDocument();
             doc.LoadHtml(html);
-
             var mangas = new List<MangaInfo>();
-
             var nodos = doc.DocumentNode.SelectNodes("//div[contains(@class, 'element') and @data-identifier]");
 
-            if (nodos == null)
-                return mangas;
+            if (nodos == null) return mangas;
 
             foreach (var nodo in nodos)
             {
@@ -34,8 +23,7 @@ namespace RipMD
                 {
                     var enlaceNodo = nodo.SelectSingleNode(".//a");
                     var url = enlaceNodo?.GetAttributeValue("href", "").Trim();
-                    if (string.IsNullOrWhiteSpace(url))
-                        continue;
+                    if (string.IsNullOrWhiteSpace(url)) continue;
 
                     var tituloNodo = nodo.SelectSingleNode(".//h4[@class='text-truncate']");
                     var titulo = tituloNodo?.GetAttributeValue("title", "").Trim();
@@ -46,7 +34,6 @@ namespace RipMD
                     var puntuacionNodo = nodo.SelectSingleNode(".//span[@class='score']//span");
                     var puntuacion = puntuacionNodo?.InnerText?.Trim() ?? "";
 
-                    // Buscar el background-image del estilo embebido
                     var estiloNodo = nodo.SelectSingleNode(".//style[contains(text(), 'background-image')]");
                     string imagenPortada = "";
 
@@ -70,13 +57,8 @@ namespace RipMD
                         Puntuacion = puntuacion
                     });
                 }
-                catch
-                {
-                    // Saltar errores individuales por nodo roto
-                    continue;
-                }
+                catch { continue; }
             }
-
             return mangas;
         }
     }

@@ -51,37 +51,13 @@
             BtnDesMan = new Button();
             BtnDesCola = new Button();
             BtnOrdenarCaps = new Button();
+            BtnCancelar = new Button();
+            TxtLogs = new TextBox();
+            label7 = new Label();
+            NumReintentosDelay = new NumericUpDown();
+            label8 = new Label();
+            ((System.ComponentModel.ISupportInitialize)NumReintentosDelay).BeginInit();
             SuspendLayout();
-            // 
-            // BtnDesMan
-            // 
-            BtnDesMan.Location = new Point(570, 119);
-            BtnDesMan.Name = "BtnDesMan";
-            BtnDesMan.Size = new Size(94, 29);
-            BtnDesMan.TabIndex = 6;
-            BtnDesMan.Text = "Descargar";
-            BtnDesMan.UseVisualStyleBackColor = true;
-            BtnDesMan.Click += BtnDesMan_Click;
-            // 
-            // BtnDesCola
-            // 
-            BtnDesCola.Location = new Point(570, 599);
-            BtnDesCola.Name = "BtnDesCola";
-            BtnDesCola.Size = new Size(94, 29);
-            BtnDesCola.TabIndex = 19;
-            BtnDesCola.Text = "Descargar";
-            BtnDesCola.UseVisualStyleBackColor = true;
-            BtnDesCola.Click += BtnDesCola_Click;
-            // 
-            // BtnOrdenarCaps
-            // 
-            BtnOrdenarCaps.Location = new Point(673, 599);
-            BtnOrdenarCaps.Name = "BtnOrdenarCaps";
-            BtnOrdenarCaps.Size = new Size(138, 29);
-            BtnOrdenarCaps.TabIndex = 22;
-            BtnOrdenarCaps.Text = "Ordenar Capítulos";
-            BtnOrdenarCaps.UseVisualStyleBackColor = true;
-            BtnOrdenarCaps.Click += BtnOrdenarCaps_Click;
             // 
             // label1
             // 
@@ -186,7 +162,7 @@
             PnlWeb.Enabled = false;
             PnlWeb.Location = new Point(673, 58);
             PnlWeb.Name = "PnlWeb";
-            PnlWeb.Size = new Size(376, 535);
+            PnlWeb.Size = new Size(376, 157);
             PnlWeb.TabIndex = 14;
             // 
             // label5
@@ -241,11 +217,95 @@
             BtnAbrirDes.UseVisualStyleBackColor = true;
             BtnAbrirDes.Click += BtnAbrirDes_Click;
             // 
+            // BtnDesMan
+            // 
+            BtnDesMan.Location = new Point(570, 119);
+            BtnDesMan.Name = "BtnDesMan";
+            BtnDesMan.Size = new Size(94, 29);
+            BtnDesMan.TabIndex = 6;
+            BtnDesMan.Text = "Descargar";
+            BtnDesMan.UseVisualStyleBackColor = true;
+            BtnDesMan.Click += BtnDesMan_Click;
+            // 
+            // BtnDesCola
+            // 
+            BtnDesCola.Location = new Point(570, 599);
+            BtnDesCola.Name = "BtnDesCola";
+            BtnDesCola.Size = new Size(94, 29);
+            BtnDesCola.TabIndex = 19;
+            BtnDesCola.Text = "Descargar";
+            BtnDesCola.UseVisualStyleBackColor = true;
+            BtnDesCola.Click += BtnDesCola_Click;
+            // 
+            // BtnOrdenarCaps
+            // 
+            BtnOrdenarCaps.Location = new Point(673, 599);
+            BtnOrdenarCaps.Name = "BtnOrdenarCaps";
+            BtnOrdenarCaps.Size = new Size(138, 29);
+            BtnOrdenarCaps.TabIndex = 22;
+            BtnOrdenarCaps.Text = "Ordenar Capítulos";
+            BtnOrdenarCaps.UseVisualStyleBackColor = true;
+            BtnOrdenarCaps.Click += BtnOrdenarCaps_Click;
+            // 
+            // BtnCancelar
+            // 
+            BtnCancelar.Enabled = false;
+            BtnCancelar.Location = new Point(817, 599);
+            BtnCancelar.Name = "BtnCancelar";
+            BtnCancelar.Size = new Size(94, 29);
+            BtnCancelar.TabIndex = 23;
+            BtnCancelar.Text = "Cancelar";
+            BtnCancelar.UseVisualStyleBackColor = true;
+            BtnCancelar.Click += BtnCancelar_Click;
+            // 
+            // TxtLogs
+            // 
+            TxtLogs.Location = new Point(673, 241);
+            TxtLogs.Multiline = true;
+            TxtLogs.Name = "TxtLogs";
+            TxtLogs.ReadOnly = true;
+            TxtLogs.ScrollBars = ScrollBars.Vertical;
+            TxtLogs.Size = new Size(376, 352);
+            TxtLogs.TabIndex = 24;
+            // 
+            // label7
+            // 
+            label7.AutoSize = true;
+            label7.Location = new Point(673, 218);
+            label7.Name = "label7";
+            label7.Size = new Size(119, 20);
+            label7.TabIndex = 25;
+            label7.Text = "Log de Errores:";
+            // 
+            // NumReintentosDelay
+            // 
+            NumReintentosDelay.Location = new Point(917, 600);
+            NumReintentosDelay.Maximum = new decimal(new int[] { 60, 0, 0, 0 });
+            NumReintentosDelay.Minimum = new decimal(new int[] { 5, 0, 0, 0 });
+            NumReintentosDelay.Name = "NumReintentosDelay";
+            NumReintentosDelay.Size = new Size(50, 27);
+            NumReintentosDelay.TabIndex = 26;
+            NumReintentosDelay.Value = new decimal(new int[] { 20, 0, 0, 0 });
+            // 
+            // label8
+            // 
+            label8.AutoSize = true;
+            label8.Location = new Point(973, 603);
+            label8.Name = "label8";
+            label8.Size = new Size(76, 20);
+            label8.TabIndex = 27;
+            label8.Text = "Delay (s)";
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1054, 659);
+            Controls.Add(label8);
+            Controls.Add(NumReintentosDelay);
+            Controls.Add(label7);
+            Controls.Add(TxtLogs);
+            Controls.Add(BtnCancelar);
             Controls.Add(BtnOrdenarCaps);
             Controls.Add(BtnAbrirDes);
             Controls.Add(PbrCola);
@@ -275,6 +335,7 @@
             Text = "RipMD";
             FormClosed += Form1_FormClosed;
             Load += Form1_Load;
+            ((System.ComponentModel.ISupportInitialize)NumReintentosDelay).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -303,5 +364,10 @@
         private Button BtnAbrirDes;
         private Button BtnDesCola;
         private Button BtnOrdenarCaps;
+        private Button BtnCancelar;
+        private TextBox TxtLogs;
+        private Label label7;
+        private NumericUpDown NumReintentosDelay;
+        private Label label8;
     }
 }

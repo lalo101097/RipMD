@@ -1,4 +1,6 @@
 ﻿using ImageMagick;
+using System.IO;
+using System;
 
 namespace RipMD.Helpers
 {
@@ -11,10 +13,12 @@ namespace RipMD.Helpers
             image.Write(outputJpeg);
         }
     }
+
     public static class RutaTemporalHelper
     {
         private static readonly string CarpetaRaiz = Path.Combine(Path.GetTempPath(), "RipMD");
 
+        // El constructor estático se asegura de que la carpeta exista la primera vez que se usa la clase.
         static RutaTemporalHelper()
         {
             if (!Directory.Exists(CarpetaRaiz))
@@ -23,6 +27,12 @@ namespace RipMD.Helpers
 
         public static string CrearRutaTemporal(string nombreArchivoConExtension)
         {
+            // CORRECCIÓN: Nos aseguramos de que la carpeta exista CADA VEZ que pedimos una ruta.
+            // Esto evita el error si se borró previamente.
+            if (!Directory.Exists(CarpetaRaiz))
+            {
+                Directory.CreateDirectory(CarpetaRaiz);
+            }
             return Path.Combine(CarpetaRaiz, nombreArchivoConExtension);
         }
 
@@ -35,7 +45,6 @@ namespace RipMD.Helpers
             }
             catch (Exception ex)
             {
-                // Si falla, no se rompe la app, solo lo ignoramos o lo puedes loguear si quieres.
                 Console.WriteLine("Error al limpiar carpeta temporal: " + ex.Message);
             }
         }

@@ -4,11 +4,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
-using HtmlAgilityPack;
-using System.Collections.Generic;
-using System.Text.RegularExpressions;
-
 
 namespace RipMD.Services
 {
@@ -18,7 +15,6 @@ namespace RipMD.Services
         private readonly string _descargasDir;
         private readonly HttpClient _client;
         private readonly CookieContainer _cookieContainer;
-        public HttpClient GetHttpClient() => _client;
 
         public DownloaderService(string userAgent, string descargasDir, string cfClearance)
         {
@@ -55,25 +51,17 @@ namespace RipMD.Services
 
         public string GetOutputDirectory() => _descargasDir;
 
-        public async Task DescargarYConvertirWebP(string url, string destinoSinExtension, string referer)
+        public async Task DescargarYConvertirWebP(string url, string destinoSinExtension, string referer, CancellationToken cancellationToken)
         {
             string nombreBase = Path.GetFileName(destinoSinExtension);
-            string tempWebP = RutaTemporalHelper.CrearRutaTemporal(nombreBase + ".webp");
+            string tempWebP = Path.Combine(RutaTemporalHelper.CarpetaTemporal, nombreBase + ".webp");
             string rutaJPEG = destinoSinExtension + ".jpg";
 
             try
             {
-                await DescargarConReintento(url, referer, tempWebP);
-
+                await DescargarConReintento(url, referer, tempWebP, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested(); // Comprobar cancelación después de la descarga
                 WebPHelper.ConvertToJpeg(tempWebP, rutaJPEG);
-            }
-            catch (HttpRequestException ex)
-            {
-                MessageBox.Show($"Descarga fallida:\n{ex.Message}", "Error HTTP", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error general:\n{ex.Message}", "Error desconocido", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -82,24 +70,16 @@ namespace RipMD.Services
             }
         }
 
-        public async Task DescargarArchivo(string url, string rutaDestino, string referer)
+        public async Task DescargarArchivo(string url, string rutaDestino, string referer, CancellationToken cancellationToken)
         {
             string nombreArchivo = Path.GetFileName(rutaDestino);
-            string tempPath = RutaTemporalHelper.CrearRutaTemporal(nombreArchivo);
+            string tempPath = Path.Combine(RutaTemporalHelper.CarpetaTemporal, nombreArchivo);
 
             try
             {
-                await DescargarConReintento(url, referer, tempPath);
-
-                File.Move(tempPath, rutaDestino, overwrite: true);
-            }
-            catch (HttpRequestException ex)
-            {
-                MessageBox.Show($"Descarga fallida:\n{ex.Message}", "Error HTTP", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error general:\n{ex.Message}", "Error desconocido", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                await DescargarConReintento(url, referer, tempPath, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested(); // Comprobar cancelación
+                File.Move(tempPath, rutaDestino, true);
             }
             finally
             {
@@ -108,85 +88,42 @@ namespace RipMD.Services
             }
         }
 
-        private async Task DescargarConReintento(string url, string referer, string rutaDestino)
+        private async Task DescargarConReintento(string url, string referer, string rutaDestino, CancellationToken cancellationToken)
         {
-            while (true)
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Referrer = new Uri(referer);
+
+            using (var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Referrer = new Uri(referer);
-
-                using (var response = await _client.SendAsync(request))
+                response.EnsureSuccessStatusCode();
+                using (var fs = new FileStream(rutaDestino, FileMode.Create, FileAccess.Write))
                 {
-                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                    {
-                        // Espera 20 segundos y vuelve a intentar
-                        await Task.Delay(20000);
-                        continue;
-                    }
-
-                    using (var fs = new FileStream(rutaDestino, FileMode.Create, FileAccess.Write))
-                    {
-                        await response.Content.CopyToAsync(fs);
-                    }
-
-                    break; // Éxito, salimos del bucle
+                    await response.Content.CopyToAsync(fs);
                 }
             }
         }
 
-
-        public async Task<string> DescargarHtml(string url)
+        public async Task<string> DescargarHtml(string url, CancellationToken cancellationToken)
         {
-            var response = await _client.GetAsync(url);
+            var response = await _client.GetAsync(url, cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.Forbidden || response.StatusCode == HttpStatusCode.ServiceUnavailable)
             {
-                throw new Exception($"Error {response.StatusCode} - Probablemente Cloudflare bloqueó el acceso. Requiere actualizar cf_clearance.");
+                throw new Exception($"Error {(int)response.StatusCode} - Probablemente Cloudflare bloqueó el acceso. Requiere actualizar cf_clearance.");
             }
 
             response.EnsureSuccessStatusCode();
-
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> ObtenerUrlFinalConReferer(string urlInicial, string referer)
+        // NUEVO: Este método ahora usa el HttpClient centralizado
+        public async Task<string> ObtenerUrlFinalConReferer(string urlInicial, string referer, CancellationToken cancellationToken)
         {
-            var handler = new HttpClientHandler()
-            {
-                AllowAutoRedirect = true, // sigue redirecciones automáticamente
-                MaxAutomaticRedirections = 10
-            };
+            var request = new HttpRequestMessage(HttpMethod.Get, urlInicial);
+            request.Headers.Referrer = new Uri(referer);
 
-            using (var client = new HttpClient(handler))
-            {
-                client.DefaultRequestHeaders.Referrer = new Uri(referer);
-
-                // Solo hacemos una petición HEAD para evitar descargar el contenido completo (opcional)
-                var request = new HttpRequestMessage(HttpMethod.Get, urlInicial);
-
-                var response = await client.SendAsync(request);
-
-                // La URL final será la del response.RequestMessage.RequestUri tras redirecciones
-                return response.RequestMessage.RequestUri.ToString();
-            }
-        }
-
-        public static class RutaTemporalHelper
-        {
-            private static readonly string CarpetaRaiz = Path.Combine(Path.GetTempPath(), "RipMD");
-
-            static RutaTemporalHelper()
-            {
-                if (!Directory.Exists(CarpetaRaiz))
-                    Directory.CreateDirectory(CarpetaRaiz);
-            }
-
-            public static string CrearRutaTemporal(string nombreArchivoConExtension)
-            {
-                return Path.Combine(CarpetaRaiz, nombreArchivoConExtension);
-            }
-
-            public static string CarpetaTemporal => CarpetaRaiz;
+            var response = await _client.SendAsync(request, cancellationToken);
+            return response.RequestMessage.RequestUri.ToString();
         }
     }
 }

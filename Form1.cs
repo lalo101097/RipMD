@@ -1,18 +1,19 @@
-using Microsoft.Web.WebView2.WinForms; 
-using OpenQA.Selenium;
-using OpenQA.Selenium.Chrome;
+using Microsoft.Web.WebView2.WinForms;
 using RipMD.Extractors;
 using RipMD.Helpers;
+using RipMD.Models;
 using RipMD.Parsers;
 using RipMD.Services;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Security.Policy;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Globalization;
+using System.Net.Http;
 
 namespace RipMD
 {
@@ -22,363 +23,308 @@ namespace RipMD
         private DownloaderService downloader;
         private string cfClearance = "";
         private WebView2 webView2Zonatmo;
+        private CancellationTokenSource cts; // Para la cancelación
 
         public Form1()
         {
             InitializeComponent();
-
         }
 
         private async void Form1_Load(object sender, EventArgs e)
         {
-
             await cfRun();
-            RutaTemporalHelper.LimpiarCarpetaTemporal();
-
-
+            // CORRECCIÓN: Se elimina la limpieza de la carpeta temporal al inicio.
+            // Esta línea era la que causaba el error.
+            // RutaTemporalHelper.LimpiarCarpetaTemporal(); 
         }
 
         private async Task<bool> cfRun()
         {
-
             try
             {
-                BtnDesCap.Enabled = false;
-                BtnDesMan.Enabled = false;  
-                BtnDesCola.Enabled = false;
+                SetUIState(true);
+                BtnCookies.Enabled = false;
 
-                webView2Zonatmo = new WebView2
-                {
-                    Dock = DockStyle.Fill
-                };
-                PnlWeb.Controls.Add(webView2Zonatmo); // o agrégalo a un panel si prefieres
+                webView2Zonatmo = new WebView2 { Dock = DockStyle.Fill };
+                PnlWeb.Controls.Add(webView2Zonatmo);
 
                 string url = "https://www.zonatmo.com/";
                 cfClearance = await CfClearanceHelper.ObtenerCfClearanceAsync(url);
-
                 downloader = new DownloaderService(userAgent, "Descargas", cfClearance);
 
-                // Esperar que WebView2 esté listo
                 await webView2Zonatmo.EnsureCoreWebView2Async();
-
-                // Crear la cookie cf_clearance para el dominio
-                var cookie = webView2Zonatmo.CoreWebView2.CookieManager.CreateCookie(
-                    "cf_clearance",
-                    cfClearance,
-                    ".zonatmo.com",
-                    "/"
-                );
-
-                // (Opcional) configura la expiración si sabes cuánto dura
+                var cookie = webView2Zonatmo.CoreWebView2.CookieManager.CreateCookie("cf_clearance", cfClearance, ".zonatmo.com", "/");
                 cookie.Expires = DateTime.Now.AddHours(1);
-
-                // Inyectar la cookie
                 webView2Zonatmo.CoreWebView2.CookieManager.AddOrUpdateCookie(cookie);
-
-                // Navegar al sitio con la cookie activa
                 webView2Zonatmo.CoreWebView2.Navigate(url);
 
-                BtnDesCap.Enabled = true;
-                BtnDesMan.Enabled = true;
-                BtnDesCola.Enabled = true;
-
+                SetUIState(false);
+                BtnCookies.Enabled = true;
                 return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Error al obtener cf_clearance: " + ex.Message);
+                SetUIState(false);
+                BtnCookies.Enabled = true;
                 return false;
             }
         }
 
-
+        #region Actualización de UI
         private void ActProgCap(int valor)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action<int>(ActProgCap), valor);
-            }
-            else
-            {
-                PbrCapitulo.Value = valor;
-            }
+            if (InvokeRequired) Invoke(new Action<int>(ActProgCap), valor);
+            else PbrCapitulo.Value = valor;
         }
 
         private void ActCapDes(string valor)
         {
+            if (InvokeRequired) Invoke(new Action<string>(ActCapDes), valor);
+            else LblCapDescar.Text = valor;
+        }
+
+        private void LogError(string message)
+        {
             if (InvokeRequired)
             {
-                Invoke(new Action<int>(ActProgCap), valor);
+                Invoke(new Action<string>(LogError), message);
             }
             else
             {
-                LblCapDescar.Text = valor;
+                TxtLogs.AppendText($"{DateTime.Now:HH:mm:ss} - {message}{Environment.NewLine}");
             }
+        }
+
+        private void SetUIState(bool isRunning)
+        {
+            BtnDesCap.Enabled = !isRunning;
+            BtnDesMan.Enabled = !isRunning;
+            BtnDesCola.Enabled = !isRunning;
+            BtnCookies.Enabled = !isRunning;
+            BtnOrdenarCaps.Enabled = !isRunning;
+            BtnAbrirDes.Enabled = !isRunning;
+            BtnCancelar.Enabled = isRunning;
+        }
+        #endregion
+
+        #region Lógica de Descarga Refactorizada
+        private async Task DescargarCapituloUnico(string url)
+        {
+            var extractor = new TmoExtractor(downloader);
+            await ReintentarSiFallaAsync(
+                () => extractor.DescargarCapitulo(url, cts.Token, ActProgCap, ActCapDes)
+            );
+        }
+
+        private async Task DescargarMangaAsync(string url, double? capInicio, double? capFinal)
+        {
+            var mangaService = new MangaService(downloader);
+            var capitulos = await ReintentarSiFallaAsync(() => mangaService.ObtenerCapitulos(url, capInicio, capFinal, cts.Token));
+
+            if (capitulos == null || capitulos.Count == 0)
+            {
+                LogError($"No se encontraron capítulos para la URL: {url}");
+                return;
+            }
+
+            PbrManga.Minimum = 0;
+            PbrManga.Maximum = capitulos.Count;
+            PbrManga.Value = 0;
+
+            var extractor = new TmoExtractor(downloader);
+            foreach (var item in capitulos)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                PbrManga.Value += 1;
+
+                string urlCapitulo = await ReintentarSiFallaAsync(
+                    () => downloader.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina, cts.Token)
+                );
+
+                if (urlCapitulo != null)
+                {
+                    await ReintentarSiFallaAsync(
+                        () => extractor.DescargarCapitulo(urlCapitulo, cts.Token, ActProgCap, ActCapDes)
+                    );
+                }
+            }
+        }
+        #endregion
+
+        #region Event Handlers
+        private void BtnCancelar_Click(object sender, EventArgs e)
+        {
+            cts?.Cancel();
+            LogError("Operación de descarga cancelada por el usuario.");
         }
 
         private async void BtnDesCap_Click(object sender, EventArgs e)
         {
             string url = TxtDesCap.Text.Trim();
-            if (string.IsNullOrEmpty(url))
-            {
-                MessageBox.Show("Por favor, ingresa la URL del capítulo a descargar.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+            if (string.IsNullOrEmpty(url)) { MessageBox.Show("Ingrese URL del capítulo."); return; }
 
-            if (downloader == null)
-            {
-                MessageBox.Show("El servicio de descarga no está listo. Espera a que Selenium obtenga la cookie.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+            cts = new CancellationTokenSource();
+            SetUIState(true);
 
             try
             {
-                var extractor = new TmoExtractor(downloader);
-                await extractor.DescargarCapitulo(url, ActProgCap, ActCapDes);
-
+                await DescargarCapituloUnico(url);
                 MessageBox.Show("Capítulo descargado con éxito.");
-                PbrCapitulo.Value = 0; // Reiniciar progreso
-                LblCapDescar.Text = ""; // Limpiar etiqueta de capítulo descargado
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error al extraer imágenes: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                LogError($"Error al descargar capítulo: {ex.Message}");
+                MessageBox.Show($"Error al descargar capítulo: {ex.Message}", "Error");
+            }
+            finally
+            {
+                SetUIState(false);
+                PbrCapitulo.Value = 0;
+                LblCapDescar.Text = "";
             }
         }
 
         private async void BtnDesMan_Click(object sender, EventArgs e)
         {
+            string url = TxtMangas.Text.Trim();
+            if (string.IsNullOrEmpty(url)) { MessageBox.Show("Ingrese URL del manga."); return; }
+
+            double? capInicio = null, capFinal = null;
+            if (!string.IsNullOrWhiteSpace(TxtCapInicio.Text) && double.TryParse(TxtCapInicio.Text.Trim(), out double inicio)) capInicio = inicio;
+            if (!string.IsNullOrWhiteSpace(TxtCapFinal.Text) && double.TryParse(TxtCapFinal.Text.Trim(), out double final)) capFinal = final;
+            if (capInicio.HasValue && capFinal.HasValue && capInicio > capFinal) { MessageBox.Show("El capítulo de inicio no puede ser mayor que el final."); return; }
+
+            cts = new CancellationTokenSource();
+            SetUIState(true);
+
             try
             {
-                TxtMangas.Text = TxtMangas.Text.Trim();
-
-                double? capInicio = null;
-                double? capFinal = null;
-
-                if (!string.IsNullOrWhiteSpace(TxtCapInicio.Text))
-                {
-                    if (!double.TryParse(TxtCapInicio.Text.Trim(), out double inicio))
-                    {
-                        MessageBox.Show("El capítulo de inicio no es un número válido.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-                    capInicio = inicio;
-                }
-
-                if (!string.IsNullOrWhiteSpace(TxtCapFinal.Text))
-                {
-                    if (!double.TryParse(TxtCapFinal.Text.Trim(), out double final))
-                    {
-                        MessageBox.Show("El capítulo final no es un número válido.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-                    capFinal = final;
-                }
-
-                // Verificación adicional: si ambos están presentes, que el inicio no sea mayor que el final
-                if (capInicio.HasValue && capFinal.HasValue && capInicio > capFinal)
-                {
-                    MessageBox.Show("El capítulo de inicio no puede ser mayor que el capítulo final.", "Rango inválido", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-                var mangaService = new MangaService(downloader);
-                var capitulos = await mangaService.ObtenerCapitulos(TxtMangas.Text, capInicio, capFinal);
-
-                if (capitulos.Count == 0)
-                {
-                    MessageBox.Show("No se encontraron capítulos en el rango especificado.", "Sin resultados", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                else
-                {
-                    /*
-                    var resumen = string.Join("\n\n", capitulos
-                        .Take(10)
-                        .Select(c => $"Título: {c.Nombre}\nURL: {c.UrlVer}"));
-
-                    MessageBox.Show($"Se encontraron {capitulos.Count} capítulos.\n\nPrimeros encontrados:\n\n{resumen}",
-                        "Capítulos encontrados", MessageBoxButtons.OK, MessageBoxIcon.Information);*/
-                    var extractor = new TmoExtractor(downloader);
-                    PbrManga.Minimum = 0;
-                    PbrManga.Maximum = capitulos.Count;
-                    PbrManga.Value = 0;
-
-                    foreach (var item in capitulos)
-                    {
-                        var stopwatch = Stopwatch.StartNew();
-                        PbrManga.Value += 1;
-                        string urlCapituloIndividual = await ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina);
-                        await extractor.DescargarCapitulo(urlCapituloIndividual, ActProgCap, ActCapDes);
-                        stopwatch.Stop();
-                        if (stopwatch.Elapsed.TotalSeconds < 20)
-                        {
-                            int tiempoEspera = (int)(20 - stopwatch.Elapsed.TotalSeconds) * 1000; // Convertir a milisegundos
-                            await Task.Delay(1000); // Esperar al menos 1 segundo entre descargas
-                        }
-
-                    }
-                    MessageBox.Show($"Se descargaron {capitulos.Count} capítulos.", "Descarga completa", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    PbrManga.Value = 0; // Reiniciar progreso
-                    PbrCapitulo.Value = 0; // Reiniciar progreso del capítulo
-                    LblCapDescar.Text = ""; // Limpiar etiqueta de capítulo descargado
-                }
+                await DescargarMangaAsync(url, capInicio, capFinal);
+                MessageBox.Show("Descarga de manga completada.");
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error en Form1:\n{ex.Message}", "Excepción", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                throw; // Lánzala de nuevo si quieres que la app cierre
+                LogError($"Error en la descarga de manga: {ex.Message}");
+                MessageBox.Show($"Error en la descarga de manga: {ex.Message}", "Error");
             }
-
-        }
-
-        private void Form1_FormClosed(object sender, FormClosedEventArgs e)
-        {
-            RutaTemporalHelper.LimpiarCarpetaTemporal();
-        }
-
-        private async void BtnCookies_Click(object sender, EventArgs e)
-        {
-            PnlWeb.Controls.Clear(); // Limpiar el panel antes de agregar el WebView2
-            bool acce = await cfRun();
-            if (acce)
+            finally
             {
-                MessageBox.Show("Cookie cf_clearance obtenida correctamente.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            else
-            {
-                MessageBox.Show("No se pudo obtener la cookie cf_clearance.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetUIState(false);
+                PbrManga.Value = 0;
+                PbrCapitulo.Value = 0;
+                LblCapDescar.Text = "";
             }
         }
 
         private async void BtnDesCola_Click(object sender, EventArgs e)
         {
             string[] lineas = TxtCola.Text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            int tam = lineas.Length;
-            PbrCola.Maximum = tam;
+            PbrCola.Maximum = lineas.Length;
+            PbrCola.Value = 0;
+            TxtLogs.Clear();
 
-            foreach (string linea in lineas)
+            cts = new CancellationTokenSource();
+            SetUIState(true);
+
+            try
             {
-                string entrada = linea.Trim();
-                if (string.IsNullOrWhiteSpace(entrada))
-                    continue;
-                
-                Funciones_Extras EntradaParser = new Funciones_Extras();
-
-                // Usa el nuevo método modular que separaste para extraer la info
-                var (url, capInicio, capFinal) = EntradaParser.ParsearEntrada(entrada);
-
-                if (!Uri.IsWellFormedUriString(url, UriKind.Absolute))
+                foreach (string linea in lineas)
                 {
-                    MessageBox.Show($"URL inválida:\n{entrada}", "Error en cola", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    continue;
-                }
+                    cts.Token.ThrowIfCancellationRequested();
+                    var parser = new Funciones_Extras();
+                    var (url, capInicio, capFinal) = parser.ParsearEntrada(linea.Trim());
 
-                var stopwatch = Stopwatch.StartNew();
+                    if (!Uri.IsWellFormedUriString(url, UriKind.Absolute)) { LogError($"URL inválida: {linea}"); continue; }
 
-                try
-                {
-                    if (url.Contains("/viewer/"))
+                    try
                     {
-                        var extractor = new TmoExtractor(downloader);
-                        await ReintentarSi429Async(() => extractor.DescargarCapitulo(url, ActProgCap, ActCapDes));
-                    }
-                    else if (url.Contains("/library/"))
-                    {
-                        var mangaService = new MangaService(downloader);
-                        var capitulos = await ReintentarSi429AsyncT(() => mangaService.ObtenerCapitulos(url, capInicio, capFinal));
-
-                        var extractor = new TmoExtractor(downloader);
-                        PbrManga.Minimum = 0;
-                        PbrManga.Maximum = capitulos.Count;
-                        PbrManga.Value = 0;
-
-                        if (capitulos.Count == 0)
+                        if (url.Contains("/viewer/")) await DescargarCapituloUnico(url);
+                        else if (url.Contains("/library/")) await DescargarMangaAsync(url, capInicio, capFinal);
+                        else if (url.Contains("/lists/"))
                         {
-                            MessageBox.Show($"No se encontraron capítulos para la URL:\n{url}", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            continue;
-                        }
-
-                        foreach (var item in capitulos)
-                        {
-                            PbrManga.Value += 1;
-                            string urlCapitulo = await ReintentarSi429AsyncT(() => ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina));
-                            await ReintentarSi429Async(() => extractor.DescargarCapitulo(urlCapitulo, ActProgCap, ActCapDes));
-                        }
-                    }
-                    else if (url.Contains("/lists/"))
-                    {
-                        var mangaService = new MangaService(downloader);
-                        var mangas = await ReintentarSi429AsyncT(() => mangaService.ObtenerMangas(url));
-
-                        foreach (var manga in mangas)
-                        {
-                            if (!manga.Url.Contains("/one_shot/"))
+                            var mangaService = new MangaService(downloader);
+                            var mangas = await ReintentarSiFallaAsync(() => mangaService.ObtenerMangas(url, cts.Token));
+                            foreach (var manga in mangas)
                             {
-                                var capitulos = await ReintentarSi429AsyncT(() => mangaService.ObtenerCapitulos(manga.Url, null, null));
-                                var extractor = new TmoExtractor(downloader);
-
-                                PbrManga.Minimum = 0;
-                                PbrManga.Maximum = capitulos.Count;
-                                PbrManga.Value = 0;
-
-                                if (capitulos.Count == 0)
-                                {
-                                    MessageBox.Show($"No se encontraron capítulos para el manga:\n{manga.Titulo}", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                                    continue;
-                                }
-
-                                foreach (var item in capitulos)
-                                {
-                                    PbrManga.Value += 1;
-                                    string urlCapitulo = await ReintentarSi429AsyncT(() => ChapterParser.ObtenerUrlFinalConReferer(item.UrlVer, item.UrlPagina));
-                                    await ReintentarSi429Async(() => extractor.DescargarCapitulo(urlCapitulo, ActProgCap, ActCapDes));
-                                }
+                                cts.Token.ThrowIfCancellationRequested();
+                                if (!manga.Url.Contains("/one_shot/"))
+                                    await DescargarMangaAsync(manga.Url, null, null);
                             }
                         }
+                        else LogError($"URL no reconocida: {url}");
                     }
-                    else
-                    {
-                        MessageBox.Show($"URL no reconocida:\n{url}", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { LogError($"Error procesando '{linea}': {ex.Message}"); }
 
+                    PbrCola.Value += 1;
                 }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Error procesando esta entrada:\n\n{entrada}\n\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-
-                stopwatch.Stop();
-                if (stopwatch.Elapsed.TotalSeconds < 20)
-                {
-                    await Task.Delay(1000); // Espera mínima
-                }
-
-                PbrCola.Value += 1;
+                MessageBox.Show("Descarga en cola completada.");
             }
-
-            MessageBox.Show("Descarga en cola completada.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            PbrCola.Value = 0;
-            PbrCapitulo.Value = 0;
-            PbrManga.Value = 0;
-            LblCapDescar.Text = "";
+            catch (OperationCanceledException) { }
+            finally
+            {
+                SetUIState(false);
+                PbrCola.Value = 0; PbrManga.Value = 0; PbrCapitulo.Value = 0; LblCapDescar.Text = "";
+            }
         }
 
-        public static async Task ReintentarSi429Async(Func<Task> accion)
+        private async void BtnCookies_Click(object sender, EventArgs e)
+        {
+            PnlWeb.Controls.Clear();
+            if (await cfRun()) MessageBox.Show("Cookie cf_clearance obtenida correctamente.");
+            else MessageBox.Show("No se pudo obtener la cookie cf_clearance.", "Error");
+        }
+
+        private void BtnAbrirDes_Click(object sender, EventArgs e)
+        {
+            string rutaDescargas = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Descargas");
+            if (!Directory.Exists(rutaDescargas))
+            {
+                if (MessageBox.Show("La carpeta de descargas no existe. ¿Deseas crearla?", "Carpeta no encontrada", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                {
+                    Directory.CreateDirectory(rutaDescargas);
+                }
+                else return;
+            }
+            Process.Start("explorer.exe", rutaDescargas);
+        }
+
+        private void BtnOrdenarCaps_Click(object sender, EventArgs e)
+        {
+            var funcionesExtras = new Funciones_Extras();
+            funcionesExtras.AgruparCarpetasPorNombreBase("Descargas");
+        }
+
+        private void Form1_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            RutaTemporalHelper.LimpiarCarpetaTemporal();
+        }
+        #endregion
+
+        #region Lógica de Reintentos
+        private async Task ReintentarSiFallaAsync(Func<Task> accion)
         {
             while (true)
             {
                 try
                 {
                     await accion();
-                    break; // Éxito, salimos del bucle
+                    break;
                 }
-                catch (HttpRequestException ex)
+                catch (HttpRequestException ex) when (ex.Message.Contains("429"))
                 {
-                    await Task.Delay(20000); // Espera 20 segundos
+                    cts.Token.ThrowIfCancellationRequested();
+                    int delaySeconds = (int)NumReintentosDelay.Value;
+                    LogError($"Error 429. Reintentando en {delaySeconds} segundos...");
+                    await Task.Delay(delaySeconds * 1000, cts.Token);
                 }
             }
         }
 
-        public static async Task<T> ReintentarSi429AsyncT<T>(Func<Task<T>> funcion)
+        private async Task<T> ReintentarSiFallaAsync<T>(Func<Task<T>> funcion)
         {
             while (true)
             {
@@ -388,43 +334,13 @@ namespace RipMD
                 }
                 catch (HttpRequestException ex) when (ex.Message.Contains("429"))
                 {
-                    await Task.Delay(20000); // Espera 20 segundos
+                    cts.Token.ThrowIfCancellationRequested();
+                    int delaySeconds = (int)NumReintentosDelay.Value;
+                    LogError($"Error 429. Reintentando en {delaySeconds} segundos...");
+                    await Task.Delay(delaySeconds * 1000, cts.Token);
                 }
             }
         }
-
-
-
-        private void BtnAbrirDes_Click(object sender, EventArgs e)
-        {
-            string rutaDescargas = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Descargas");
-
-            if (!Directory.Exists(rutaDescargas))
-            {
-                var resultado = MessageBox.Show(
-                    "La carpeta de descargas no existe. ¿Deseas crearla?",
-                    "Carpeta no encontrada",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question
-                );
-
-                if (resultado == DialogResult.Yes)
-                {
-                    Directory.CreateDirectory(rutaDescargas);
-                    System.Diagnostics.Process.Start("explorer.exe", rutaDescargas);
-                }
-                // Si dicen que no, no se hace nada
-            }
-            else
-            {
-                System.Diagnostics.Process.Start("explorer.exe", rutaDescargas);
-            }
-        }
-
-        private void BtnOrdenarCaps_Click(object sender, EventArgs e)
-        {
-            Funciones_Extras funcionesExtras = new Funciones_Extras();
-            funcionesExtras.AgruparCarpetasPorNombreBase("Descargas");
-        }
+        #endregion
     }
 }
